@@ -1,0 +1,130 @@
+# Biblioteca de exemplos (few-shot). O agente recebe os 3 mais parecidos com a pergunta.
+# São DIFERENTES das perguntas de avaliação (eval/questions.yaml), para a avaliação ser honesta.
+# Todos foram executados no cinerocket.db (tests/test_examples.py garante que continuam válidos).
+
+- pergunta: Quais os 5 filmes com maior orçamento em dólares?
+  sql: |-
+    SELECT d.titulo, d.ano_lancamento, ROUND(f.orcamento_usd, 2) AS orcamento_usd
+    FROM fact_movies_performance f
+    JOIN dim_movies d ON d.sk_movie_id = f.sk_movie_id
+    WHERE f.orcamento_usd IS NOT NULL
+    ORDER BY f.orcamento_usd DESC
+    LIMIT 5
+
+- pergunta: Qual foi a bilheteria total por ano de lançamento?
+  sql: |-
+    SELECT d.ano_lancamento, COUNT(*) AS filmes_com_receita,
+           ROUND(SUM(f.receita_brl), 2) AS receita_total_brl
+    FROM fact_movies_performance f
+    JOIN dim_movies d ON d.sk_movie_id = f.sk_movie_id
+    WHERE f.receita_brl IS NOT NULL
+    GROUP BY d.ano_lancamento
+    ORDER BY d.ano_lancamento
+
+- pergunta: Quantos filmes de comédia foram lançados em 2022?
+  sql: |-
+    SELECT COUNT(DISTINCT d.sk_movie_id) AS filmes
+    FROM dim_movies d
+    JOIN bridge_movie_genre bg ON bg.sk_movie_id = d.sk_movie_id
+    JOIN dim_genres g ON g.sk_genre_id = bg.sk_genre_id
+    WHERE g.nome_genero = 'Comedy' AND d.ano_lancamento = 2022
+
+- pergunta: Quais atores mais atuaram em filmes de terror?
+  sql: |-
+    SELECT p.nome_pessoa AS ator, COUNT(DISTINCT bp.sk_movie_id) AS filmes_de_terror
+    FROM dim_people p
+    JOIN bridge_movie_person bp ON bp.sk_person_id = p.sk_person_id
+    JOIN bridge_movie_genre bg ON bg.sk_movie_id = bp.sk_movie_id
+    JOIN dim_genres g ON g.sk_genre_id = bg.sk_genre_id
+    WHERE p.tipo_pessoa = 'Ator' AND g.nome_genero = 'Horror'
+    GROUP BY p.sk_person_id
+    ORDER BY filmes_de_terror DESC
+    LIMIT 10
+
+- pergunta: Quais diretores dirigiram mais filmes?
+  sql: |-
+    SELECT p.nome_pessoa AS diretor, COUNT(DISTINCT bp.sk_movie_id) AS filmes
+    FROM dim_people p
+    JOIN bridge_movie_person bp ON bp.sk_person_id = p.sk_person_id
+    WHERE p.tipo_pessoa = 'Diretor'
+    GROUP BY p.sk_person_id
+    ORDER BY filmes DESC
+    LIMIT 10
+
+- pergunta: Quais produtoras lançaram mais filmes?
+  sql: |-
+    SELECT c.nome_produtora, COUNT(DISTINCT bc.sk_movie_id) AS filmes
+    FROM dim_companies c
+    JOIN bridge_movie_company bc ON bc.sk_company_id = c.sk_company_id
+    GROUP BY c.sk_company_id
+    ORDER BY filmes DESC
+    LIMIT 10
+
+- pergunta: Qual a receita total dos filmes de produtoras com Disney no nome?
+  sql: |-
+    SELECT c.nome_produtora, COUNT(*) AS filmes_com_receita,
+           ROUND(SUM(f.receita_brl), 2) AS receita_total_brl
+    FROM dim_companies c
+    JOIN bridge_movie_company bc ON bc.sk_company_id = c.sk_company_id
+    JOIN fact_movies_performance f ON f.sk_movie_id = bc.sk_movie_id
+    WHERE c.nome_produtora LIKE '%Disney%' AND f.receita_brl IS NOT NULL
+    GROUP BY c.sk_company_id
+    ORDER BY receita_total_brl DESC
+
+- pergunta: Quais são os 10 filmes com maior nota no IMDb?
+  sql: |-
+    SELECT d.titulo, d.ano_lancamento, f.nota_imdb, f.qtd_imdb
+    FROM fact_movies_performance f
+    JOIN dim_movies d ON d.sk_movie_id = f.sk_movie_id
+    WHERE f.nota_imdb IS NOT NULL AND f.qtd_imdb >= 50
+    ORDER BY f.nota_imdb DESC, f.qtd_imdb DESC
+    LIMIT 10
+
+- pergunta: Qual a nota média dos usuários por gênero?
+  sql: |-
+    SELECT g.nome_genero, COUNT(*) AS avaliacoes, ROUND(AVG(r.rating), 2) AS nota_media_usuarios
+    FROM movie_reviews r
+    JOIN bridge_movie_genre bg ON bg.sk_movie_id = r.sk_movie_id
+    JOIN dim_genres g ON g.sk_genre_id = bg.sk_genre_id
+    GROUP BY g.nome_genero
+    ORDER BY nota_media_usuarios DESC
+
+- pergunta: Qual o prejuízo médio dos filmes de 2020, entre os que têm receita informada?
+  sql: |-
+    SELECT COUNT(*) AS filmes, ROUND(AVG(f.lucro_brl), 2) AS lucro_medio_brl
+    FROM fact_movies_performance f
+    JOIN dim_movies d ON d.sk_movie_id = f.sk_movie_id
+    WHERE d.ano_lancamento = 2020 AND f.receita_brl IS NOT NULL AND f.lucro_brl < 0
+
+- pergunta: Qual a margem de lucro média de cada ano de lançamento?
+  sql: |-
+    SELECT d.ano_lancamento, COUNT(*) AS filmes,
+           ROUND(100.0 * SUM(f.lucro_brl) / SUM(f.receita_brl), 2) AS margem_pct
+    FROM fact_movies_performance f
+    JOIN dim_movies d ON d.sk_movie_id = f.sk_movie_id
+    WHERE f.receita_brl >= 10000 AND f.orcamento_brl >= 10000
+    GROUP BY d.ano_lancamento
+    ORDER BY d.ano_lancamento
+
+- pergunta: Quais filmes lançados nos últimos 3 anos têm mais votos no TMDB?
+  sql: |-
+    SELECT d.titulo, d.ano_lancamento, f.qtd_tmdb, f.nota_tmdb
+    FROM fact_movies_performance f
+    JOIN dim_movies d ON d.sk_movie_id = f.sk_movie_id
+    WHERE d.status_filme = 'Lançado'
+      AND d.ano_lancamento BETWEEN CAST(strftime('%Y', 'now') AS INTEGER) - 2
+                               AND CAST(strftime('%Y', 'now') AS INTEGER)
+      AND f.qtd_tmdb IS NOT NULL
+    ORDER BY f.qtd_tmdb DESC
+    LIMIT 10
+
+- pergunta: Quais roteiristas também dirigiram filmes?
+  sql: |-
+    SELECT r.nome_pessoa, COUNT(DISTINCT br.sk_movie_id) AS filmes_como_roteirista
+    FROM dim_people r
+    JOIN dim_people d ON d.nome_pessoa = r.nome_pessoa AND d.tipo_pessoa = 'Diretor'
+    JOIN bridge_movie_person br ON br.sk_person_id = r.sk_person_id
+    WHERE r.tipo_pessoa = 'Roteirista'
+    GROUP BY r.sk_person_id
+    ORDER BY filmes_como_roteirista DESC
+    LIMIT 10

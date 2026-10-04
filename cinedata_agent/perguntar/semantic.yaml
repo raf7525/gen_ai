@@ -1,0 +1,181 @@
+# Camada semântica da camada Gold (cinerocket.db).
+# Fonte do esquema anotado e das regras de negócio que vão para o prompt.
+# As regras vêm da exploração do banco (notebooks/exploracao.ipynb).
+
+tabelas:
+  dim_movies:
+    descricao: Um filme por linha (catálogo do TMDB, lançamentos de 2016 a 2029).
+    colunas:
+      sk_movie_id: chave do filme (hash); use só em JOIN
+      id_filme: id do filme no TMDB
+      titulo: título (em geral em inglês); há títulos repetidos, mostre também o ano
+      data_lancamento: data de lançamento (AAAA-MM-DD)
+      ano_lancamento: ano de lançamento (INTEGER)
+      duracao_minutos: duração em minutos (0 = desconhecida)
+      status_filme: "'Lançado', 'Pós-Produção', 'Em Produção' ou 'Planejado'"
+      sinopse: sinopse em inglês
+  fact_movies_performance:
+    descricao: Métricas de cada filme (1:1 com dim_movies). Valores ausentes são NULL.
+    colunas:
+      sk_movie_id: chave do filme
+      orcamento_brl: orçamento em R$
+      receita_brl: receita/bilheteria em R$
+      lucro_brl: receita_brl − orcamento_brl, com NULL tratado como 0 (nunca é NULL)
+      orcamento_usd: orçamento em US$
+      receita_usd: receita em US$
+      lucro_usd: lucro em US$ (mesma regra do lucro_brl)
+      popularidade: popularidade no TMDB (quanto maior, mais popular)
+      nota_tmdb: nota média no TMDB, 0 a 10 (0 = sem nota)
+      qtd_tmdb: quantidade de votos no TMDB
+      nota_imdb: nota média no IMDb, 0 a 10 (NULL = sem nota)
+      qtd_imdb: quantidade de votos no IMDb
+  dim_genres:
+    descricao: Gêneros (19 valores, nomes em inglês).
+    colunas:
+      sk_genre_id: chave do gênero
+      nome_genero: nome do gênero em inglês
+  bridge_movie_genre:
+    descricao: Filme ↔ gênero (N:N).
+    colunas:
+      sk_movie_id: chave do filme
+      sk_genre_id: chave do gênero
+  dim_people:
+    descricao: Pessoas por papel. A mesma pessoa real tem uma linha por papel.
+    colunas:
+      sk_person_id: chave da pessoa naquele papel
+      nome_pessoa: nome
+      tipo_pessoa: "'Ator' (inclui atrizes), 'Diretor' ou 'Roteirista'"
+  bridge_movie_person:
+    descricao: Filme ↔ pessoa (N:N). O papel NÃO fica aqui, fica em dim_people.tipo_pessoa.
+    colunas:
+      sk_movie_id: chave do filme
+      sk_person_id: chave da pessoa
+  dim_companies:
+    descricao: Produtoras.
+    colunas:
+      sk_company_id: chave da produtora
+      nome_produtora: nome da produtora
+  bridge_movie_company:
+    descricao: Filme ↔ produtora (N:N).
+    colunas:
+      sk_movie_id: chave do filme
+      sk_company_id: chave da produtora
+  movie_reviews:
+    descricao: Avaliações individuais de usuários da plataforma.
+    colunas:
+      sk_movie_id: chave do filme
+      name: nome do usuário
+      rating: nota do usuário, 0 a 10 (mesma escala do IMDb)
+      text: comentário
+      created_at: data da avaliação
+  dim_reviews:
+    descricao: Resumo das avaliações de usuários por filme (consistente com movie_reviews).
+    colunas:
+      sk_movie_id: chave do filme
+      qtd_avaliacoes_usuarios: quantidade de avaliações
+      nota_media_usuarios: nota média dos usuários (0 a 10)
+
+# Regras de negócio. Uma regra entra no prompt quando alguma palavra da pergunta
+# começa com um dos gatilhos (sem acento). Regras com `sempre: true` entram sempre.
+regras:
+  - id: titulos
+    sempre: true
+    texto: >-
+      Há títulos repetidos (versões diferentes no TMDB): agrupe filmes por sk_movie_id e
+      mostre titulo e ano_lancamento. Nunca selecione colunas sk_* no resultado final.
+  - id: moeda
+    gatilhos: [receit, faturam, bilhet, arrecad, lucr, prejuiz, orcam, custo, dinheiro, financ,
+               margem, rentab, retorno, roi, dolar, real, reais]
+    texto: >-
+      Receita = faturamento = bilheteria = receita_brl. Use as colunas *_brl (R$) por padrão e
+      *_usd só se a pergunta pedir dólar.
+  - id: lucro
+    gatilhos: [lucr, prejuiz, margem, rentab, retorno, roi]
+    texto: >-
+      lucro_brl nunca é NULL: sem receita ele vira −orçamento (prejuízo artificial). Sempre que
+      usar lucro, filtre filmes com receita informada: WHERE receita_brl IS NOT NULL.
+  - id: margem
+    gatilhos: [margem, rentab, retorno, roi]
+    texto: >-
+      Margem de lucro de um filme (%) = ROUND(100.0 * lucro_brl / receita_brl, 2), somente com
+      receita_brl >= 10000 AND orcamento_brl >= 10000 (abaixo disso há valores lixo, como
+      receita de R$ 3). Margem média de um grupo (gênero, produtora, ano) =
+      ROUND(100.0 * SUM(lucro_brl) / SUM(receita_brl), 2) com o mesmo filtro: é a média
+      ponderada pela receita (a média simples das margens é destruída por valores extremos).
+      ROI = lucro / orçamento, com o mesmo filtro.
+  - id: popularidade
+    gatilhos: [popular, famos, hype, tendenc]
+    texto: >-
+      Ao ordenar por popularidade, ignore filmes quase sem votos:
+      COALESCE(qtd_tmdb, 0) + COALESCE(qtd_imdb, 0) >= 50 (há popularidades corrompidas).
+  - id: notas
+    gatilhos: [nota, avalia, critic, imdb, tmdb, melhor, pior, divergen, diferen, rating]
+    texto: >-
+      "Nota" sem especificar = nota_imdb. nota_tmdb = 0 significa sem nota (use nota_tmdb > 0);
+      nota_imdb sem nota é NULL. Ao ranquear filmes individuais por nota ou por diferença de
+      notas, exija pelo menos 50 votos em cada nota usada (qtd_tmdb >= 50, qtd_imdb >= 50).
+      Em médias por grupo (ano, gênero, diretor), basta a nota não ser nula.
+  - id: medias
+    gatilhos: [media, medio]
+    texto: >-
+      Em médias por grupo (ano, gênero, diretor, produtora), inclua também a contagem do grupo
+      (ex.: COUNT(*) AS filmes), para mostrar em quantos filmes cada média se baseia. Na
+      resposta, só atribua um valor fora da curva a poucos filmes se a contagem estiver no
+      resultado; não invente causas que os dados não mostram.
+  - id: pessoas
+    gatilhos: [ator, atriz, atores, atrizes, diretor, diretora, dirig, roteir, elenco, equipe,
+               pessoa, dupla, parceri, trabalh, particip, atuou, atuar, atuac, estrel]
+    texto: >-
+      O papel fica em dim_people.tipo_pessoa ('Ator', 'Diretor', 'Roteirista'); a
+      bridge_movie_person não tem papel. Conte filmes com COUNT(DISTINCT sk_movie_id).
+      Para duplas ator–diretor, junte bridge_movie_person duas vezes pelo sk_movie_id (uma
+      para cada papel) e exclua pares em que o nome do ator é igual ao do diretor; essa
+      consulta é pesada, então filtre por papel já nos JOINs.
+  - id: tempo
+    gatilhos: [ano, anos, ultim, recent, lanc, decada, periodo, atual, hoje]
+    texto: >-
+      Para datas relativas use CAST(strftime('%Y', 'now') AS INTEGER) como ano atual, nunca um
+      ano fixo. "Últimos N anos" = ano_lancamento BETWEEN ano_atual − (N − 1) AND ano_atual,
+      só com status_filme = 'Lançado'. A base vai de 2016 a 2029, mas quase não há filmes
+      depois de 2024.
+  - id: generos
+    gatilhos: [genero, categoria, tipo]
+    texto: >-
+      nome_genero está em inglês (veja a tabela de gêneros). Um filme pode ter vários gêneros
+      e conta em cada um; cerca de 20 mil filmes não têm gênero. Responda com os nomes em
+      português.
+  - id: usuarios
+    gatilhos: [usuari, avalia, review, resenha, coment, publico, espectador]
+    texto: >-
+      Avaliações de usuários: movie_reviews (uma linha por avaliação; rating de 0 a 10, a mesma
+      escala do IMDb) ou dim_reviews (resumo por filme). "Mais avaliados" = mais avaliações
+      (COUNT). Ao comparar a média dos usuários com outra nota, exija pelo menos 3 avaliações
+      e pelo menos 50 votos na outra nota (com o IMDb: qtd_imdb >= 50; não filtre qtd_tmdb se a
+      nota TMDB não for usada).
+  - id: produtoras
+    gatilhos: [produtor, estudio, empresa, companhi, marvel, disney, warner, universal]
+    texto: >-
+      Produtoras: dim_companies.nome_produtora via bridge_movie_company; um filme pode ter
+      várias e conta em cada uma. Se não souber o nome exato, use LIKE '%nome%'.
+
+# Gêneros: nome no banco → nome em português e termos que o usuário pode usar (sem acento).
+generos:
+  Action: {pt: Ação, termos: [acao]}
+  Adventure: {pt: Aventura, termos: [aventura]}
+  Animation: {pt: Animação, termos: [animacao, animado, animados, desenho]}
+  Comedy: {pt: Comédia, termos: [comedia, comedias]}
+  Crime: {pt: Crime, termos: [crime, policial, policiais]}
+  Documentary: {pt: Documentário, termos: [documentario, documentarios]}
+  Drama: {pt: Drama, termos: [drama, dramas]}
+  Family: {pt: Família, termos: [familia, infantil, infantis]}
+  Fantasy: {pt: Fantasia, termos: [fantasia]}
+  History: {pt: História, termos: [historia, historico, historicos]}
+  Horror: {pt: Terror, termos: [terror, horror]}
+  Music: {pt: Música, termos: [musica, musical, musicais]}
+  Mystery: {pt: Mistério, termos: [misterio]}
+  Romance: {pt: Romance, termos: [romance, romances, romantico, romanticos]}
+  Science Fiction: {pt: Ficção científica, termos: [ficcao, sci-fi, scifi]}
+  Thriller: {pt: Suspense, termos: [suspense, thriller]}
+  Tv Movie: {pt: Filme para TV, termos: [telefilme, tv]}
+  War: {pt: Guerra, termos: [guerra]}
+  Western: {pt: Faroeste, termos: [faroeste, western, bangue]}
